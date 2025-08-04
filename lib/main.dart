@@ -39,7 +39,7 @@ class _InferenceScreenState extends State<InferenceScreen> {
 
   // --- Configure Laptop/Server Connection ---
   // IMPORTANT: Replace with your laptop's actual Wi-Fi IPv4 address!
-  static const String LAPTOP_IP = '192.168.0.111'; // e.g., '192.168.1.100'
+  static const String LAPTOP_IP = '192.168.1.68'; // e.g., '192.168.1.100'
   static const int SERVER_PORT = 12345;
 
   // --- GPT-2 Model Specifics ---
@@ -79,11 +79,9 @@ class _InferenceScreenState extends State<InferenceScreen> {
   }
 
   // --- Tokenize Prompt using GPT-2 vocabulary ---
-  // This is a simplified character-by-character lookup.
-  // For true GPT-2 BPE, you'd use a more complex library/logic.
   List<int> _tokenizePrompt(String prompt) {
     List<int> tokenIds = [];
-    List<String> words = prompt.split(' '); // Simple word split
+    List<String> words = prompt.split(' ');
 
     int eosTokenId = _vocabMap['<|endoftext|>'] ?? 50256; // Fallback in case vocab isn't fully loaded
 
@@ -105,12 +103,14 @@ class _InferenceScreenState extends State<InferenceScreen> {
     // Ensure tokens don't exceed MAX_SEQUENCE_LENGTH
     if (tokenIds.length > MAX_SEQUENCE_LENGTH) {
       tokenIds = tokenIds.sublist(0, MAX_SEQUENCE_LENGTH);
-    } else {
-      // Pad with pad_token_id (which is eos_token_id for GPT-2)
-      while (tokenIds.length < MAX_SEQUENCE_LENGTH) {
-        tokenIds.add(eosTokenId);
-      }
     }
+    // what is the need of padding?
+    // else {
+    //   // Pad with pad_token_id (which is eos_token_id for GPT-2)
+    //   while (tokenIds.length < MAX_SEQUENCE_LENGTH) {
+    //     tokenIds.add(eosTokenId);
+    //   }
+    // }
     return tokenIds;
   }
 
@@ -157,22 +157,19 @@ class _InferenceScreenState extends State<InferenceScreen> {
       _generatedText = "Generating...";
     });
 
+    print("Given prompt is following: $prompt");
     // 1. Tokenize the prompt (on phone)
     List<int> inputTokenIds = _tokenizePrompt(prompt);
     var input = [inputTokenIds]; // TFLite input expects a list of lists (batch_size=1)
+    print("Input tokenIds are: $input, $input.length");
 
     // 2. Prepare output buffer for intermediate embeddings
-    // Output shape from model_gpt2_embeddings_head.tflite is (1, MAX_SEQUENCE_LENGTH, GPT2_EMBEDDING_DIM)
-    var outputShape = _interpreter!.getOutputTensor(0).shape; // Should be [1, 128, 768]
-
-    // Create a 3D list for the output buffer
-    // This is equivalent to `List<List<List<double>>>` for shape [1, 128, 768]
     var intermediateEmbeddings = List.generate(
-      outputShape[0], // Batch size: 1
+        1,       // Batch size
           (i) => List.generate(
-        outputShape[1], // Sequence length: 128
+        inputTokenIds.length, // Sequence length
             (j) => List.filled(
-          outputShape[2], // Embedding dimension: 768
+          GPT2_EMBEDDING_DIM,
           0.0,
         ),
       ),
@@ -182,6 +179,10 @@ class _InferenceScreenState extends State<InferenceScreen> {
     try {
       _interpreter!.run(input, intermediateEmbeddings);
       print("Head model (embeddings) inference complete. Intermediate embeddings generated.");
+      print("embeddings after generating are: $intermediateEmbeddings");
+      // -0.09761997312307358, -0.2737913727760315, 0.1988200694322586, 0.026379115879535675, 0.04370621591806412
+      // -0.006365961395204067, -0.24725341796875, 0.11279799789190292, 0.13865919411182404, 0.16941316425800323
+
     } catch (e) {
       setState(() { _status = "Error running head model: $e"; });
       print("TFLite run error: $e");
@@ -190,11 +191,11 @@ class _InferenceScreenState extends State<InferenceScreen> {
     }
 
     // 4. Prepare data for transmission: JSON with embeddings and attention mask
-    List<int> attentionMask = List.filled(MAX_SEQUENCE_LENGTH, 0);
+    List<int> attentionMask = List.filled(inputTokenIds.length, 1);
     // Fill attention mask for actual tokens used in the prompt (before padding)
-    for(int i = 0; i < inputTokenIds.length; i++) { // Use inputTokenIds length for mask
-      attentionMask[i] = 1;
-    }
+    // for(int i = 0; i < inputTokenIds.length; i++) { // Use inputTokenIds length for mask
+    //   attentionMask[i] = 1;
+    // }
 
     Map<String, dynamic> dataPayload = {
       'input_embeddings': intermediateEmbeddings,
