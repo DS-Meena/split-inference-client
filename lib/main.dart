@@ -43,9 +43,9 @@ class _InferenceScreenState extends State<InferenceScreen> {
   static const int SERVER_PORT = 12345;
 
   // --- GPT-2 Model Specifics ---
-  static const int GPT2_VOCAB_SIZE = 50257; // GPT-2 default vocab size
-  static const int GPT2_EMBEDDING_DIM = 768; // GPT-2 hidden_size / embedding_dim
-  static const int MAX_SEQUENCE_LENGTH = 128; // Must match TFLite head's dummy_sequence_length during conversion
+  static const int GPT2_VOCAB_SIZE = 50257;
+  static const int GPT2_EMBEDDING_DIM = 768;
+  static const int MAX_SEQUENCE_LENGTH = 128;
 
   Interpreter? _interpreter;
   bool _isModelLoaded = false;
@@ -104,13 +104,6 @@ class _InferenceScreenState extends State<InferenceScreen> {
     if (tokenIds.length > MAX_SEQUENCE_LENGTH) {
       tokenIds = tokenIds.sublist(0, MAX_SEQUENCE_LENGTH);
     }
-    // what is the need of padding?
-    // else {
-    //   // Pad with pad_token_id (which is eos_token_id for GPT-2)
-    //   while (tokenIds.length < MAX_SEQUENCE_LENGTH) {
-    //     tokenIds.add(eosTokenId);
-    //   }
-    // }
     return tokenIds;
   }
 
@@ -124,8 +117,6 @@ class _InferenceScreenState extends State<InferenceScreen> {
         _status = "GPT-2 Embeddings Head Model loaded. Ready.";
       });
       print("TFLite Head Model loaded successfully.");
-      print("Head Model Input Shape: ${_interpreter!.getInputTensor(0).shape}");
-      print("Head Model Output Shape: ${_interpreter!.getOutputTensor(0).shape}");
     } catch (e) {
       setState(() {
         _status = "Failed to load TFLite model: $e";
@@ -157,11 +148,8 @@ class _InferenceScreenState extends State<InferenceScreen> {
       _generatedText = "Generating...";
     });
 
-    print("Given prompt is following: $prompt");
     // 1. Tokenize the prompt (on phone)
     List<int> inputTokenIds = _tokenizePrompt(prompt);
-    var input = [inputTokenIds]; // TFLite input expects a list of lists (batch_size=1)
-    print("Input tokenIds are: $input, $input.length");
 
     // 2. Prepare output buffer for intermediate embeddings
     var intermediateEmbeddings = List.generate(
@@ -177,11 +165,8 @@ class _InferenceScreenState extends State<InferenceScreen> {
 
     // 3. Run Head Model Inference (on phone)
     try {
-      _interpreter!.run(input, intermediateEmbeddings);
+      _interpreter!.run([inputTokenIds], intermediateEmbeddings);
       print("Head model (embeddings) inference complete. Intermediate embeddings generated.");
-      print("embeddings after generating are: $intermediateEmbeddings");
-      // -0.09761997312307358, -0.2737913727760315, 0.1988200694322586, 0.026379115879535675, 0.04370621591806412
-      // -0.006365961395204067, -0.24725341796875, 0.11279799789190292, 0.13865919411182404, 0.16941316425800323
 
     } catch (e) {
       setState(() { _status = "Error running head model: $e"; });
@@ -192,10 +177,6 @@ class _InferenceScreenState extends State<InferenceScreen> {
 
     // 4. Prepare data for transmission: JSON with embeddings and attention mask
     List<int> attentionMask = List.filled(inputTokenIds.length, 1);
-    // Fill attention mask for actual tokens used in the prompt (before padding)
-    // for(int i = 0; i < inputTokenIds.length; i++) { // Use inputTokenIds length for mask
-    //   attentionMask[i] = 1;
-    // }
 
     Map<String, dynamic> dataPayload = {
       'input_embeddings': intermediateEmbeddings,
@@ -209,7 +190,7 @@ class _InferenceScreenState extends State<InferenceScreen> {
     });
 
     // --- Network Communication and Server Inference ---
-    await _sendDataToServer(dataToSend);
+    await _sendDataToServer(dataToSend, prompt);
 
     setState(() {
       _isProcessing = false;
@@ -217,7 +198,7 @@ class _InferenceScreenState extends State<InferenceScreen> {
   }
 
   // --- TCP Communication Logic (Sends/Receives JSON) ---
-  Future<void> _sendDataToServer(Uint8List dataToSend) async {
+  Future<void> _sendDataToServer(Uint8List dataToSend, String prompt) async {
     Socket? socket;
     try {
       socket = await Socket.connect(LAPTOP_IP, SERVER_PORT, timeout: const Duration(seconds: 15));
@@ -274,7 +255,7 @@ class _InferenceScreenState extends State<InferenceScreen> {
 
       setState(() {
         _status = "Generation complete.";
-        _generatedText = generatedText;
+        _generatedText = prompt + generatedText;
       });
 
     } on SocketException catch (e) {
